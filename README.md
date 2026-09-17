@@ -23,6 +23,8 @@ context is billed at a fraction of the miss rate.
 ## Features
 
 - **Streaming by default** — replies appear token by token, with a spinner while you wait.
+- **Bring your own key** — no key ships with the tool; on first run it asks you to paste
+  yours, checks it against the API and saves it to your own config file.
 - **Reasoning support** — `deepseek-reasoner` chain-of-thought is shown dimmed and separate
   from the answer (`--no-reasoning` hides it).
 - **Persistent conversations** — every session is a JSON file you can grep, resume with
@@ -67,7 +69,27 @@ $ ./deepseek "hello"
 
 ## Set your API key
 
-Create a key at <https://platform.deepseek.com/api_keys>, then pick one of:
+Create a key at <https://platform.deepseek.com/api_keys>. The first time you run the
+tool it notices that no key is configured and asks you to paste one:
+
+```console
+$ deepseek "hello"
+No DeepSeek API key found.
+Get one at https://platform.deepseek.com/api_keys, then paste it here (input is hidden).
+It will be saved to ~/.deepseek-cli/config.json and sent only to the DeepSeek API.
+API key:
+API key accepted (sk-abc...wxyz) /home/you/.deepseek-cli/config.json
+```
+
+The pasted key is verified against `GET /user/balance` before it is stored, input is
+hidden, and nothing is written unless the API accepts the key. From then on it is picked
+up automatically — you are never asked twice.
+
+The prompt is only shown on a real terminal with a prompt available. Non-interactive
+callers (pipes, CI, `--json`, `--no-prompt`, `DEEPSEEK_CLI_NO_PROMPT=1`) get a clear error
+and exit code `2` instead of hanging.
+
+Prefer to configure it yourself? Any of these also work, and outrank the config file:
 
 ```console
 $ export DEEPSEEK_API_KEY=sk-...        # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
@@ -75,14 +97,20 @@ $ python -m deepseek_cli --api-key sk-... "hello"
 $ python -m deepseek_cli --set api_key=sk-...   # written to ~/.deepseek-cli/config.json
 ```
 
+Inside the interactive shell, `/key sk-...` replaces the key, `/key` prompts for a new one
+(also hidden and verified), and `/key` with no terminal prints the usage.
+
 Nothing else needs configuring. Verify what the tool resolved:
 
 ```console
 $ python -m deepseek_cli --print-config
+$ # ... api key      sk-abc...wxyz (from config file)
 ```
 
 > **Keep keys out of source control.** The config file lives in your home directory,
-> not in the repo, and `.gitignore` excludes `config.json`, `.env` and `*.key`.
+> not in the repo, and `.gitignore` excludes `config.json`, `.env` and `*.key`. When a key
+> is saved the file is also created with owner-only permissions where the platform allows
+> it. Only the masked form (`first6...last4`) is ever printed.
 
 ## Usage
 
@@ -122,6 +150,7 @@ A trailing `\` continues a line, so you can paste multi-line prompts.
 | `--history-limit` | how many past messages to resend as context |
 | `--no-save` | keep the conversation out of `~/.deepseek-cli/sessions` |
 | `--api-key`, `--base-url` | override credentials or point at a proxy |
+| `--no-prompt` | never ask for an API key (fail instead) |
 | `--timeout`, `--max-retries` | request timeout and retry budget |
 | `-o, --output FILE` | append the reply to a file |
 | `--json` | structured output (one-shot mode) |
@@ -142,6 +171,7 @@ A trailing `\` continues a line, so you can paste multi-line prompts.
 | `/temp [0-2]`, `/maxtokens [n]` | show or set generation parameters |
 | `/stream on\|off`, `/reasoning on\|off` | toggle live streaming and reasoning output |
 | `/usage`, `/balance`, `/config` | tokens, credit, effective settings |
+| `/key [sk-...]` | show, replace and save the API key |
 | `/save`, `/sessions`, `/load ID`, `/delete ID` | manage saved conversations |
 | `/quit` (or `/exit`, Ctrl+D) | save and leave |
 
@@ -151,7 +181,7 @@ A trailing `\` continues a line, so you can paste multi-line prompts.
 | --- | --- |
 | `0` | success |
 | `1` | API or network failure |
-| `2` | usage error (bad flag, missing prompt, missing API key) |
+| `2` | usage error (bad flag, missing prompt, missing or cancelled API key) |
 | `130` | interrupted with Ctrl+C |
 
 ## Configuration
@@ -160,6 +190,7 @@ A trailing `\` continues a line, so you can paste multi-line prompts.
 
 ```json
 {
+  "api_key": "",
   "model": "deepseek-chat",
   "base_url": "https://api.deepseek.com",
   "system_prompt": "",
@@ -174,6 +205,11 @@ A trailing `\` continues a line, so you can paste multi-line prompts.
 ```
 
 Precedence is: command line flags → environment variables → `config.json` → defaults.
+
+The API key follows the same order, and anything missing from all four triggers the
+first-run prompt described above. Set `DEEPSEEK_CLI_NO_PROMPT=1` (or pass `--no-prompt`)
+to turn that prompt off — useful in scripts and CI, where the tool will simply report the
+missing key and exit `2`.
 
 ### Cost estimates
 
@@ -197,6 +233,7 @@ deepseek_cli/
   client.py     urllib transport, SSE parsing, retries, usage normalisation
   session.py    conversation state and JSON persistence
   config.py     config/credential resolution
+  onboard.py    first-run API key prompt, verification and storage
   render.py     ANSI colours, spinner, tables, footers
 ```
 

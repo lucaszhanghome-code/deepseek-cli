@@ -11,10 +11,12 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from deepseek_cli import cli  # noqa: E402
+from deepseek_cli import onboard  # noqa: E402
 from deepseek_cli.args import build_parser, resolve_settings, apply_overrides  # noqa: E402
 from deepseek_cli import config as config_mod  # noqa: E402
 from deepseek_cli.chat import Chat  # noqa: E402
@@ -400,6 +402,164 @@ class CommandTests(BaseStubTest):
             chat.send("transient", display=False)
             chat.handle_command("/save")
         self.assertEqual(chat.store.list_sessions(), [])
+
+
+class _tty:
+    """A ``sys.stdin`` stand-in that reports itself as a terminal."""
+
+    def isatty(self) -> bool:
+        return True
+
+    def read(self) -> str:
+        return ""
+
+
+class FirstRunKeyTests(BaseStubTest):
+    """The paste-your-own-key onboarding flow."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for name in ("DEEPSEEK_API_KEY", "DEEPSEEK_KEY", "DEEPSEEK_CLI_NO_PROMPT"):
+            os.environ.pop(name, None)
+
+    def run_main(
+        self, argv: List[str], stdin: Optional[io.StringIO] = None
+    ) -> "tuple[int, str, str]":
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), _stdin(stdin or io.StringIO("")):
+            code = cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_pasting_a_key_on_first_run_starts_the_chat(self) -> None:
+        with StubServer() as server:
+            argv = ["--base-url", server.base_url, "say hello"]
+            with mock.patch.object(onboard, "read_key", return_value=VALID_KEY):
+                code, out, err = self.run_main(argv, stdin=_tty())
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertIn("Hello from the stub", out)
+        self.assertIn("accepted", err)
+        self.assertEqual(config_mod.load_config()["api_key"], VALID_KEY)
+
+    def test_the_saved_key_is_reused_without_asking_again(self) -> None:
+        with StubServer() as server:
+            argv = ["--base-url", server.base_url, "say hello"]
+            with mock.patch.object(onboard, "read_key", return_value=VALID_KEY):
+                self.run_main(argv, stdin=_tty())
+            with mock.patch.object(onboard, "read_key", side_effect=AssertionError):
+                code, out, _ = self.run_main(argv, stdin=_tty())
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Hello from the stub", out)
+
+    def test_cancelling_the_prompt_leaves_the_run_keyless(self) -> None:
+        with StubServer() as server:
+            argv = ["--base-url", server.base_url, "say hello"]
+            with mock.patch.object(onboard, "read_key", return_value=None):
+                code, out, err = self.run_main(argv, stdin=_tty())
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertEqual(out, "")
+        self.assertIn("cancelled", err)
+
+    def test_no_prompt_flag_never_reads_a_key(self) -> None:
+        with StubServer() as server:
+            with mock.patch.object(onboard, "read_key", side_effect=AssertionError) as reader:
+                code, _, err = self.run_main(
+                    ["--no-prompt", "--base-url", server.base_url, "hi"], stdin=_tty()
+                )
+        self.assertEqual(reader.call_count, 0)
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("DEEPSEEK_API_KEY", err)
+
+    def test_no_prompt_environment_variable_never_reads_a_key(self) -> None:
+        os.environ["DEEPSEEK_CLI_NO_PROMPT"] = "1"
+        with StubServer() as server:
+            with mock.patch.object(onboard, "read_key", side_effect=AssertionError) as reader:
+                code, _, _ = self.run_main(["--base-url", server.base_url, "hi"], stdin=_tty())
+        self.assertEqual(reader.call_count, 0)
+        self.assertEqual(code, cli.EXIT_USAGE)
+
+    def test_json_mode_never_reads_a_key(self) -> None:
+        with StubServer() as server:
+            with mock.patch.object(onboard, "read_key", side_effect=AssertionError) as reader:
+                code, out, err = self.run_main(
+                    ["--json", "--base-url", server.base_url, "hi"], stdin=_tty()
+                )
+        self.assertEqual(reader.call_count, 0)
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertEqual(out, "")
+        self.assertIn("DEEPSEEK_API_KEY", err)
+
+    def test_piped_stdin_without_a_key_fails_instead_of_hanging(self) -> None:
+        with StubServer() as server:
+            with mock.patch.object(onboard, "read_key", side_effect=AssertionError):
+                code, _, err = self.run_main(
+                    ["--base-url", server.base_url], stdin=io.StringIO("piped\n")
+                )
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("DEEPSEEK_API_KEY", err)
+
+    def test_config_never_prints_the_raw_key(self) -> None:
+        with StubServer() as server:
+            chat = self.make_chat(server)
+            chat.client.api_key = "sk-abcdef123456789"
+            chat.handle_command("/config")
+        printed = chat.out.getvalue()
+        self.assertNotIn("sk-abcdef123456789", printed)
+        self.assertIn(config_mod.mask_key("sk-abcdef123456789"), printed)
+
+    def test_print_config_reports_a_missing_key(self) -> None:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), _stdin(io.StringIO("")):
+            code = cli.main(["--print-config"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("MISSING", out.getvalue())
+
+    def test_print_config_reports_the_saved_key_as_masked(self) -> None:
+        config_mod.save_api_key("sk-abcdef123456789")
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), _stdin(io.StringIO("")):
+            code = cli.main(["--print-config"])
+        self.assertEqual(code, cli.EXIT_OK)
+        printed = out.getvalue()
+        self.assertNotIn("sk-abcdef123456789", printed)
+        self.assertIn("config file", printed)
+
+
+class KeyCommandTests(BaseStubTest):
+    """/key pastes, verifies and stores a key mid-session."""
+
+    def test_inline_key_is_verified_and_saved(self) -> None:
+        with StubServer() as server:
+            chat = self.make_chat(server)
+            chat.handle_command("/key " + VALID_KEY)
+        self.assertEqual(chat.client.api_key, VALID_KEY)
+        self.assertIn("accepted", chat.out.getvalue())
+        self.assertEqual(config_mod.load_config()["api_key"], VALID_KEY)
+
+    def test_a_rejected_key_is_not_stored(self) -> None:
+        with StubServer() as server:
+            chat = self.make_chat(server)
+            chat.handle_command("/key sk-wrong")
+        self.assertEqual(chat.client.api_key, VALID_KEY)
+        self.assertIn("rejected", chat.err.getvalue())
+        self.assertEqual(config_mod.load_config()["api_key"], "")
+
+    def test_the_prompt_is_used_when_no_key_is_given(self) -> None:
+        with StubServer() as server:
+            chat = self.make_chat(server)
+            with mock.patch.object(onboard, "can_prompt", return_value=True):
+                with mock.patch.object(onboard, "read_key", return_value=VALID_KEY) as reader:
+                    chat.handle_command("/key")
+        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(chat.client.api_key, VALID_KEY)
+
+    def test_usage_is_shown_when_there_is_no_terminal(self) -> None:
+        with StubServer() as server:
+            chat = self.make_chat(server)
+            with mock.patch.object(onboard, "can_prompt", return_value=False):
+                with mock.patch.object(onboard, "read_key", side_effect=AssertionError):
+                    chat.handle_command("/key")
+        self.assertIn("usage", chat.err.getvalue())
+        self.assertIn("/key", chat.err.getvalue())
 
 
 class _input_lines:

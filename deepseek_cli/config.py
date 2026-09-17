@@ -21,8 +21,10 @@ from typing import Any, Dict, Optional
 APP_NAME = "deepseek-cli"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"
+KEY_ENV_VARS = ("DEEPSEEK_API_KEY", "DEEPSEEK_KEY")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "api_key": "",
     "model": DEFAULT_MODEL,
     "base_url": DEFAULT_BASE_URL,
     "system_prompt": "",
@@ -87,6 +89,14 @@ def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
     return config
 
 
+def _restrict(path: Path) -> None:
+    """Best-effort tightening of a file's permissions to owner-only."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def save_config(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
     """Write ``config`` to disk, creating parents as needed."""
     target = Path(path) if path is not None else config_path()
@@ -97,7 +107,28 @@ def save_config(config: Dict[str, Any], path: Optional[Path] = None) -> Path:
         target.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
     except OSError as exc:
         raise ConfigError(f"could not write {target}: {exc}") from exc
+    if merged.get("api_key"):
+        _restrict(target)
     return target
+
+
+def save_api_key(key: str, path: Optional[Path] = None) -> Path:
+    """Store ``key`` in ``config.json`` so later runs need no setup."""
+    cleaned = (key or "").strip()
+    if not cleaned:
+        raise ConfigError("the API key cannot be empty")
+    config = load_config(path)
+    config["api_key"] = cleaned
+    return save_config(config, path)
+
+
+def mask_key(key: Optional[str]) -> str:
+    """Return a display-safe hint for a key; never the whole secret."""
+    if not key:
+        return "(none)"
+    if len(key) <= 10:
+        return "*" * len(key)
+    return f"{key[:6]}...{key[-4:]}"
 
 
 def resolve_api_key(
@@ -110,7 +141,7 @@ def resolve_api_key(
         return cli_value.strip()
 
     env = os.environ if environ is None else environ
-    for name in ("DEEPSEEK_API_KEY", "DEEPSEEK_KEY"):
+    for name in KEY_ENV_VARS:
         value = env.get(name)
         if value and value.strip():
             return value.strip()
@@ -120,6 +151,26 @@ def resolve_api_key(
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def api_key_source(
+    cli_value: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+    environ: Optional[Dict[str, str]] = None,
+) -> str:
+    """Return where the effective API key comes from (for display)."""
+    if cli_value and cli_value.strip():
+        return "flag"
+    env = os.environ if environ is None else environ
+    for name in KEY_ENV_VARS:
+        value = env.get(name)
+        if value and value.strip():
+            return f"${name}"
+    if config:
+        value = config.get("api_key")
+        if isinstance(value, str) and value.strip():
+            return "config file"
+    return "none"
 
 
 def resolve_base_url(
@@ -142,12 +193,17 @@ def require_api_key(
     """Like :func:`resolve_api_key` but raises when nothing is found."""
     key = resolve_api_key(cli_value, config)
     if not key:
-        raise ConfigError(
-            "no API key found.\n"
-            "Set one of:\n"
-            "  * the DEEPSEEK_API_KEY environment variable\n"
-            "  * --api-key on the command line\n"
-            f"  * an \"api_key\" entry in {config_path()}\n"
-            "Get a key at https://platform.deepseek.com/api_keys"
-        )
+        raise ConfigError(missing_key_message())
     return key
+
+
+def missing_key_message() -> str:
+    """Return the guidance shown when no API key could be found."""
+    return (
+        "no API key found.\n"
+        "Paste your own key when prompted, or provide one of:\n"
+        "  * the DEEPSEEK_API_KEY environment variable\n"
+        "  * --api-key on the command line\n"
+        f"  * an \"api_key\" entry in {config_path()}\n"
+        "Get a key at https://platform.deepseek.com/api_keys"
+    )

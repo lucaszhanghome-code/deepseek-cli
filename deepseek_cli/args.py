@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     conn = parser.add_argument_group("connection")
     conn.add_argument("--api-key", help="DeepSeek API key (defaults to $DEEPSEEK_API_KEY)")
+    conn.add_argument("--no-prompt", action="store_true",
+                      help="never ask for an API key on a terminal")
     conn.add_argument("--base-url", help="API base URL (defaults to $DEEPSEEK_BASE_URL)")
     conn.add_argument("--timeout", type=int, help="per-request timeout in seconds")
     conn.add_argument("--max-retries", type=int, help="retries for transient failures")

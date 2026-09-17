@@ -39,6 +39,10 @@ class StubHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        if self.path in ("/models", "/user/balance"):
+            if self.headers.get("Authorization") != f"Bearer {VALID_KEY}":
+                self._json(401, {"error": {"message": "invalid api key"}})
+                return
         if self.path == "/models":
             self._json(200, {"data": [{"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]})
         elif self.path == "/user/balance":

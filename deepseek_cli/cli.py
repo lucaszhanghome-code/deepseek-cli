@@ -7,7 +7,7 @@ import json
 import sys
 from typing import Any, Dict, List, Optional, Sequence
 
-from . import args as args_mod, config as config_mod, render
+from . import args as args_mod, config as config_mod, onboard, render
 from .chat import Chat
 from .client import DeepSeekClient, DeepSeekError
 from .session import Session, SessionStore
@@ -26,6 +26,9 @@ def _read_stdin() -> str:
 
 
 def _print_config(settings: Dict[str, Any], stream) -> None:
+    cfg = config_mod.load_config()
+    source = config_mod.api_key_source(config=cfg)
+    key = config_mod.resolve_api_key(config=cfg)
     rows: List[List[str]] = [
         ["model", str(settings["model"])],
         ["base_url", str(settings["base_url"])],
@@ -37,7 +40,7 @@ def _print_config(settings: Dict[str, Any], stream) -> None:
         ["max_retries", str(settings["max_retries"])],
         ["system_prompt", str(settings["system_prompt"]) or "(none)"],
         ["pricing", "configured" if settings["pricing"] else "(none)"],
-        ["api key", "found" if config_mod.resolve_api_key(config=config_mod.load_config()) else "MISSING"],
+        ["api key", f"{config_mod.mask_key(key)} (from {source})" if key else "MISSING"],
     ]
     render.print_table(rows, ["setting", "value"], stream)
     stream.write(f"\nconfig file : {config_mod.config_path()}\n")
@@ -84,10 +87,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return EXIT_OK
 
     try:
-        api_key = config_mod.require_api_key(ns.api_key, cfg)
+        api_key: Optional[str] = config_mod.require_api_key(ns.api_key, cfg)
     except config_mod.ConfigError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_USAGE
+        message = str(exc)
+        api_key = None
+        if not ns.no_prompt and not ns.as_json and onboard.can_prompt():
+            api_key = onboard.ask_for_api_key(settings, style=style, err=sys.stderr)
+        if api_key is None:
+            print(f"error: {message}", file=sys.stderr)
+            return EXIT_USAGE
 
     client = DeepSeekClient(
         api_key,

@@ -161,7 +161,7 @@ class Chat(CommandMixin):
                 spinner.stop()
             self.session.drop_last_exchange()
             self.error(f"{exc}")
-            self.err.write(self.style("  check DEEPSEEK_API_KEY or --api-key\n", "dim"))
+            self.err.write(self.style("  check DEEPSEEK_API_KEY, or paste a new key with /key\n", "dim"))
             return {"content": "", "usage": {}, "error": str(exc)}
         except DeepSeekError as exc:
             if spinner:

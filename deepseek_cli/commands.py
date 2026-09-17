@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from . import config as config_mod, render
+from . import config as config_mod, onboard, render
 from .client import DeepSeekError
 from .session import Session
 
@@ -30,6 +30,7 @@ COMMANDS: "Dict[str, Dict[str, str]]" = {
     "stream": {"args": "on|off", "help": "toggle streaming"},
     "reasoning": {"args": "on|off", "help": "toggle reasoning output"},
     "config": {"args": "", "help": "show effective settings and config paths"},
+    "key": {"args": "[key]", "help": "show, replace and save the API key"},
     "balance": {"args": "", "help": "show the account balance"},
     "save": {"args": "", "help": "save this conversation to disk"},
     "sessions": {"args": "", "help": "list saved sessions"},
@@ -236,6 +237,9 @@ class CommandMixin:
     # ------------------------------------------------------------------- state
     def cmd_config(self, rest: str) -> None:
         config = config_mod.load_config()
+        resolved = config_mod.resolve_api_key(config=config)
+        key = getattr(self.client, "api_key", "") or resolved
+        source = config_mod.api_key_source(config=config) if resolved else "this session"
         rows: List[List[str]] = [
             ["model", str(self.model)],
             ["temperature", str(self.settings.get("temperature"))],
@@ -246,12 +250,46 @@ class CommandMixin:
             ["max_retries", str(self.settings.get("max_retries"))],
             ["system_prompt", self.session.system_prompt or "(none)"],
             ["pricing", "configured" if self.settings.get("pricing") else "(none)"],
+            ["api key", f"{config_mod.mask_key(key)} (from {source})" if key else "MISSING"],
         ]
         render.print_table(rows, ["setting", "value"], self.out)
         self.out.write(self.style(f"\nconfig file : {config_mod.config_path()}\n", "dim"))
         self.out.write(self.style(f"sessions dir: {config_mod.sessions_dir()}\n", "dim"))
-        if config.get("api_key"):
-            self.out.write(self.style("api key     : from config file\n", "dim"))
+
+    def cmd_key(self, rest: str) -> None:
+        """Show, replace and store the API key."""
+        current = getattr(self.client, "api_key", "") or ""
+        supplied = rest.strip()
+        if not supplied:
+            self.out.write(f"current key: {config_mod.mask_key(current)}\n")
+            if not onboard.can_prompt():
+                self.err.write(
+                    "usage: /key <api-key>  (paste one from "
+                    f"{onboard.KEY_URL}, or run without a key to be asked)\n"
+                )
+                return
+            supplied = (onboard.read_key(self.err, prompt="new API key: ") or "").strip()
+            if not supplied:
+                self.out.write("cancelled\n")
+                return
+
+        problem = onboard.verify_key(
+            supplied,
+            base_url=getattr(self.client, "base_url", config_mod.DEFAULT_BASE_URL),
+            timeout=int(self.settings.get("timeout") or 30),
+        )
+        if problem:
+            self.error(problem)
+            return
+        try:
+            path = config_mod.save_api_key(supplied)
+        except config_mod.ConfigError as exc:
+            self.error(str(exc))
+            return
+        self.client.api_key = supplied
+        self.out.write(
+            f"API key accepted and saved ({config_mod.mask_key(supplied)}) to {path}\n"
+        )
 
     def cmd_balance(self, rest: str) -> None:
         try:
