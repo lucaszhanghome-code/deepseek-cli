@@ -55,6 +55,13 @@ class KeyPromptTests(unittest.TestCase):
         self.assertFalse(onboard.can_prompt(stdin=_FakeStdin(False)))
         self.assertFalse(onboard.can_prompt(interactive=False, stdin=_FakeStdin(True)))
 
+    @unittest.skipUnless(sys.platform == "win32", "the NUL device is Windows-only")
+    def test_the_null_device_is_not_mistaken_for_a_terminal(self) -> None:
+        with open(os.devnull) as null:
+            self.assertTrue(null.isatty())
+            self.assertFalse(onboard._console_attached(null))
+            self.assertFalse(onboard.can_prompt(stdin=null))
+
     def test_prompting_can_be_switched_off_by_the_environment(self) -> None:
         os.environ[onboard.NO_PROMPT_ENV] = "1"
         self.assertFalse(onboard.can_prompt(stdin=_FakeStdin(True)))

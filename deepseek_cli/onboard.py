@@ -29,6 +29,28 @@ def prompting_allowed(environ: Optional[Dict[str, str]] = None) -> bool:
     return value not in TRUE_VALUES
 
 
+def _console_attached(stream: TextIO) -> bool:
+    """Return ``False`` when a Windows "terminal" is really the NUL device.
+
+    ``isatty()`` cannot tell the two apart on Windows: the NUL device is a
+    character device just like the console, so ``prog < NUL`` would otherwise
+    hang waiting for a key that will never arrive. Only a real console accepts
+    ``GetConsoleMode``.
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        import msvcrt
+
+        handle = msvcrt.get_osfhandle(stream.fileno())
+        mode = ctypes.c_uint32()
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        return bool(kernel32.GetConsoleMode(ctypes.c_void_p(handle), ctypes.byref(mode)))
+    except Exception:  # noqa: BLE001 - never block a legitimate prompt
+        return True
+
+
 def can_prompt(
     *,
     interactive: bool = True,
@@ -40,9 +62,11 @@ def can_prompt(
         return False
     stream = sys.stdin if stdin is None else stdin
     try:
-        return bool(stream.isatty())
+        if not stream.isatty():
+            return False
     except (AttributeError, ValueError):
         return False
+    return _console_attached(stream)
 
 
 def _writable_stream(stream: Optional[TextIO]) -> Optional[TextIO]:
