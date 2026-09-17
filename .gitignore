@@ -1,0 +1,25 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Test / tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Never commit credentials or local chat history
+.env
+*.key
+secrets.json
+config.json

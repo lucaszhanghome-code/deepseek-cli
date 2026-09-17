@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepseek-cli"
+version = "0.1.0"
+description = "A dependency-free terminal chat client for the DeepSeek API"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "lucaszhanghome-code" }]
+keywords = ["deepseek", "cli", "llm", "chat", "terminal", "openai-compatible"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "build>=1"]
+
+[project.urls]
+Homepage = "https://github.com/lucaszhanghome-code/deepseek-cli"
+
+[project.scripts]
+deepseek = "deepseek_cli.cli:main"
+
+[tool.setuptools]
+packages = ["deepseek_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

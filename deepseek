@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Launcher for POSIX shells: forwards any arguments to the deepseek CLI.
+exec python3 -m deepseek_cli "$@"
